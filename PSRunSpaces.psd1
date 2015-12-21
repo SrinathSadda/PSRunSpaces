@@ -2,8 +2,8 @@
 # Module Manifest Name: PSRunSpaces.psd1
 # Module Manifest Description: PowerShell RunSpaces Module
 # Author: Srinath Sadda
-# Version: 1.0
-# Updated: 5/6/2015
+# Version: 1.0.1
+# Updated: 12/20/2015
 # Copyright © 2015 Srinath Sadda
 #########################################################
 
@@ -13,7 +13,7 @@
 RootModule = '.\PSRunSpaces.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.0.0'
+ModuleVersion = '1.0.1.0'
 
 # ID used to uniquely identify this module
 GUID = '231b5f47-d05d-4cc8-a2b7-8ce60e4fd398'

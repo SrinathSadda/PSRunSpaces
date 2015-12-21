@@ -2,8 +2,8 @@
 # Module Name: PSRunSpaces.psm1
 # Module Description: Functions to invoke runspaces with multi-threading
 # Author: Srinath Sadda
-# Version: 1.0
-# Updated: 5/6/2015
+# Version: 1.0.1
+# Updated: 12/20/2015
 # Copyright © 2015 Srinath Sadda
 #########################################################
 
@@ -84,7 +84,14 @@ Function Invoke-Async {
         Foreach($Arg in $Arguments) {
             # NOTE: Out-Null - Deletes output instead of sending it down the pipeline.
             # Adds an argument for a positional parameter of a command without specifying the parameter name.
-            $Pipeline.AddArgument($Arg) | Out-Null
+            If ($Arg -is [Object[]]) {
+                Foreach($Arg_ in $Arg) {
+                    $Pipeline.AddArgument($Arg_) | Out-Null
+                }
+            }
+            Else {
+                $Pipeline.AddArgument($Arg) | Out-Null
+            }
         }
 
         # Asynchronously runs the commands of the PowerShell object pipeline.
@@ -294,8 +301,8 @@ Function Invoke-PSRunSpaces {
             Executes a set of parameterized script blocks asynchronously using runspaces and returns the resulting data.
         .DESCRIPTION
             Encapsulates generic logic for using Powershell background runspaces to execute parameterized script blocks in an efficient multi-threaded fashion.
-        .PARAMETER Servers
-            List of target servers.
+        .PARAMETER Objects
+            List of objects.
         .PARAMETER ScriptBlock
             Represents a precompiled block of script text that can be used as a single unit.
             ScriptBlock should contain one or more parameters.
@@ -307,21 +314,28 @@ Function Invoke-PSRunSpaces {
             The maximum number of concurrent threads to use. The default value is equal to no. of specified servers. Maximum is 64.
         .PARAMETER Progress
             An optional switch to display a progress bar that depicts the status of a running command.
-        .PARAMETER ServerInstance
+        .PARAMETER SendObjectInstance
         .EXAMPLE
-            Opens a separate runspace for each server specified in the $Servers variable and executes the ScriptBlock with the specified no. of Arguments.
+            Opens a separate runspace for each object specified in the $Objects variable and executes the ScriptBlock with the specified no. of Arguments.
             
-            $Servers = @('S1.Contoso.com','S2.Contoso.com')
-            $ScriptBlock = { Param($Computer,$Service) Get-Servie -Name $Service -ComputerName $Computer }
+            $Service = "Netlogon"
+            $Objects = @('S1.Contoso.com','S2.Contoso.com')
+            $ScriptBlock = {
+                Param(
+                    $Object,
+                    $Service
+                )
+                Get-Servie -Name $Service -ComputerName $Object
+            }
             
-            Invoke-PSRunSpaces -Servers $Servers -ScriptBlock $ScriptBlock -Arguments $Computer,$Service
+            Invoke-PSRunSpaces -Objects $Objects -ScriptBlock $ScriptBlock -Arguments $Service -SendObjectInstance
     #>
 
     [CmdletBinding()]
     Param (
-        [Parameter(Position=0,Mandatory=$True,HelpMessage="Specify a list of servers:")]
+        [Parameter(Position=0,Mandatory=$True,HelpMessage="Specify a list of objects:")]
         [ValidateNotNullOrEmpty()]
-        [String[]] $Servers,
+        $Objects,
 
         [Parameter(Position=1,Mandatory=$True,HelpMessage="A script block is an instance of a Microsoft .NET Framework type (System.Management.Automation.ScriptBlock):")]
         [ValidateNotNullOrEmpty()]
@@ -340,16 +354,16 @@ Function Invoke-PSRunSpaces {
         [Alias("Args")]
         [Object[]] $Arguments,
 
-        [Parameter(Position=3,Mandatory=$False,HelpMessage="Specify maximum no. of threads (maximum is 64):")]
+        [Parameter(Position=3,Mandatory=$False,HelpMessage="Specify maximum no. of threads (maximum is 32):")]
         [ValidateNotNullOrEmpty()]
-        [ValidateRange(1,64)]
+        [ValidateRange(1,32)]
         [Int16] $MaxThreads,
 
         [Parameter(Position=4,Mandatory=$False,HelpMessage="Specify this switch to display a progress bar that depicts the status of a running command:")]
         [Switch] $Progress,
 
         [Parameter(Position=5,Mandatory=$False)]
-        [Switch] $ServerInstance
+        [Switch] $SendObjectInstance
     )
 
     Try {
@@ -360,21 +374,28 @@ Function Invoke-PSRunSpaces {
         $Status = @()
         
         # Create a pool with specified no. of runspaces.
-        If ($MaxThreads) { $RSPool = New-RunSpacePool -MaxThreads $MaxThreads }
+        If (!$MaxThreads) {
+            If ($Objects.Count -gt 32) {
+                $MaxThreads = 32
+            }
+            Else {
+                $MaxThreads = $Objects.Count
+            }
+        }
         
-        # Create a pool with sufficient no. of runspaces (based on no. of servers)
-        Else { $RSPool = New-RunSpacePool -MaxThreads $Servers.Count }
+        # Create a pool with sufficient no. of runspaces (based on no. of objects)
+        $RSPool = New-RunSpacePool -MaxThreads $MaxThreads
 
-        ForEach ($Server in $Servers) {
+        ForEach ($Object in $Objects) {
             # Suspends the activity for the specified period of time until a runspace is available.
             While ($($RSPool.GetAvailableRunspaces()) -le 0) {
                 Start-Sleep -Milliseconds 200
             }
             
             # Create a PowerShell pipeline and executes a script block asynchronously.
-            If (($Arguments) -and ($ServerInstance)) { $AsyncPipelines += Invoke-Async -RunSpacePool $RSPool -ScriptBlock $ScriptBlock -Arguments $Server,$Arguments }
-            ElseIf (($Arguments) -and (!$ServerInstance)) { $AsyncPipelines += Invoke-Async -RunSpacePool $RSPool -ScriptBlock $ScriptBlock -Arguments $Arguments }
-            ElseIf ((!$Arguments) -and ($ServerInstance)) { $AsyncPipelines += Invoke-Async -RunSpacePool $RSPool -ScriptBlock $ScriptBlock -Arguments $Server }
+            If (($Arguments) -and ($SendObjectInstance)) { $AsyncPipelines += Invoke-Async -RunSpacePool $RSPool -ScriptBlock $ScriptBlock -Arguments $Object,@($Arguments) }
+            ElseIf (($Arguments) -and (!$SendObjectInstance)) { $AsyncPipelines += Invoke-Async -RunSpacePool $RSPool -ScriptBlock $ScriptBlock -Arguments @($Arguments) }
+            ElseIf ((!$Arguments) -and ($SendObjectInstance)) { $AsyncPipelines += Invoke-Async -RunSpacePool $RSPool -ScriptBlock $ScriptBlock -Arguments $Object }
             Else { $AsyncPipelines += Invoke-Async -RunSpacePool $RSPool -ScriptBlock $ScriptBlock }
         }
 
@@ -392,8 +413,7 @@ Function Invoke-PSRunSpaces {
     }
     Catch {
         # Capture an exception
-        $E = $_.Exception.Message
-        Return $E
+        Write-Error -Exception $_.Exception -Message $_.Exception.Message
     }
     Finally {
         # Releases all resources used by the PowerShell object.
